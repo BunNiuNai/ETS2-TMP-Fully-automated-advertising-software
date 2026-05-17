@@ -1,0 +1,39 @@
+# Build outputs
+*.class
+*.jar
+build/
+
+# Build outputs
+*.exe
+*.spec
+
+# jpackage output
+dist/
+*.zip
+*.tar.gz
+*.msi
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+.project
+.classpath
+.settings/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# JRE / runtime (too large for GitHub)
+jre/
+
+# Log files
+*.log
+*.txt
+
+# Backup files
+*~
+*.bak
+*.swp
