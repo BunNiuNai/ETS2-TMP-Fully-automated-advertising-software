@@ -10,6 +10,9 @@ import java.util.Date;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.prefs.Preferences;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public class TMPAdSoftware extends JFrame {
 
@@ -37,11 +40,12 @@ public class TMPAdSoftware extends JFrame {
     };
 
     // ── 字段 ──────────────────────────────────
-    private int currentMessageIndex;
-    private boolean isRunning;
-    private int countdownSeconds;
+    private volatile int currentMessageIndex;
+    private volatile boolean isRunning;
+    private volatile int countdownSeconds;
     private Timer timer;
     private Robot robot;
+    private ExecutorService executor;
     private JTextField countdownField;
     private JLabel remainingTimeLabel;
     private JLabel currentMessageLabel;
@@ -106,6 +110,11 @@ public class TMPAdSoftware extends JFrame {
         this.currentMessageIndex = 0;
         this.isRunning = false;
         this.prefs = Preferences.userNodeForPackage(TMPAdSoftware.class);
+        this.executor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "msg-sender");
+            t.setDaemon(true);
+            return t;
+        });
 
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         setLocationRelativeTo(null);
@@ -118,15 +127,6 @@ public class TMPAdSoftware extends JFrame {
                 System.exit(0);
             }
         });
-
-        try {
-            this.robot = new Robot();
-        } catch (AWTException e) {
-            e.printStackTrace();
-            JOptionPane.showMessageDialog(this,
-                "无法初始化 Robot，自动发送功能可能无法正常使用",
-                "错误", JOptionPane.ERROR_MESSAGE);
-        }
 
         // ── 主面板 ──
         JPanel mainPanel = new JPanel();
@@ -167,6 +167,20 @@ public class TMPAdSoftware extends JFrame {
         mainPanel.add(buildLogCard(), gbc);
 
         setContentPane(mainPanel);
+
+        // Robot 初始化（必须在 UI 组件创建之后，以便失败时禁用按钮）
+        try {
+            this.robot = new Robot();
+        } catch (AWTException e) {
+            e.printStackTrace();
+            startButton.setEnabled(false);
+            startButton.setToolTipText("Robot 初始化失败");
+            appendLog("错误: Robot 初始化失败，自动发送功能不可用");
+            JOptionPane.showMessageDialog(this,
+                "无法初始化 Robot，自动发送功能可能无法正常使用",
+                "错误", JOptionPane.ERROR_MESSAGE);
+        }
+
         setSize(540, 860);
         setMinimumSize(new Dimension(460, 700));
         setVisible(true);
@@ -507,6 +521,38 @@ public class TMPAdSoftware extends JFrame {
         logArea.setCaretPosition(logArea.getDocument().getLength());
     }
 
+    // ---------- 校验工具（可测试） ----------
+
+    /**
+     * 校验倒计时输入。返回 null 表示通过，否则返回错误消息。
+     */
+    static String validateCountdown(String input) {
+        if (input == null || input.trim().isEmpty()) {
+            return "请输入倒计时时间";
+        }
+        int minutes;
+        try {
+            minutes = Integer.parseInt(input.trim());
+        } catch (NumberFormatException e) {
+            return "请输入有效的整数";
+        }
+        if (minutes <= 0) {
+            return "倒计时必须大于 0 分钟";
+        }
+        if (minutes > 1440) {
+            return "倒计时不能超过 1440 分钟（24 小时）";
+        }
+        return null;
+    }
+
+    /**
+     * 将分钟转为秒。抛出 ArithmeticException 如果溢出。
+     */
+    static int parseCountdown(String input) {
+        int minutes = Integer.parseInt(input.trim());
+        return Math.multiplyExact(minutes, 60);
+    }
+
     // ---------- 控制 ----------
 
     private void start() {
@@ -535,13 +581,25 @@ public class TMPAdSoftware extends JFrame {
             return;
         }
 
+        String validationError = validateCountdown(countdownText);
+        if (validationError != null) {
+            JOptionPane.showMessageDialog(this, validationError, "提示", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
         int intervalMinutes;
         try {
-            intervalMinutes = Integer.parseInt(countdownText);
-            this.countdownSeconds = intervalMinutes * 60;
+            intervalMinutes = Integer.parseInt(countdownText.trim());
+            this.countdownSeconds = parseCountdown(countdownText);
         } catch (NumberFormatException e) {
             JOptionPane.showMessageDialog(this,
                 "请输入有效的倒计时时间",
+                "提示",
+                JOptionPane.WARNING_MESSAGE);
+            return;
+        } catch (ArithmeticException e) {
+            JOptionPane.showMessageDialog(this,
+                "倒计时数值过大，请减小",
                 "提示",
                 JOptionPane.WARNING_MESSAGE);
             return;
@@ -566,7 +624,7 @@ public class TMPAdSoftware extends JFrame {
                 SwingUtilities.invokeLater(() -> {
                     remainingTimeLabel.setText(String.valueOf(countdownSeconds));
                     if (countdownSeconds <= 0) {
-                        new Thread(() -> sendMessage()).start();
+                        executor.submit(() -> sendMessage());
                         countdownSeconds = intervalSeconds;
                     }
                     countdownSeconds--;
@@ -594,22 +652,34 @@ public class TMPAdSoftware extends JFrame {
             this.timer.cancel();
             this.timer = null;
         }
+        if (this.executor != null) {
+            this.executor.shutdown();
+            try {
+                if (!this.executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                    this.executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                this.executor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
         this.robot = null;
     }
 
     private void sendMessage() {
+        int idx = this.currentMessageIndex;  // 快照，防止并发修改
         String message = null;
         boolean found = false;
-        int startIndex = this.currentMessageIndex;
+        int startIndex = idx;
 
         while (!found) {
-            message = messageAreas[currentMessageIndex].getText().trim();
+            message = messageAreas[idx].getText().trim();
 
             if (message != null && !message.isEmpty()) {
                 found = true;
             } else {
-                currentMessageIndex = (currentMessageIndex + 1) % 5;
-                if (currentMessageIndex == startIndex) {
+                idx = (idx + 1) % 5;
+                if (idx == startIndex) {
                     break;
                 }
             }
@@ -632,24 +702,26 @@ public class TMPAdSoftware extends JFrame {
 
                 pressKey(this.robot, "ENTER");
 
-                final int sentIndex = currentMessageIndex;
+                final int sentIndex = idx;
                 final String sentMsg = message.length() > 30 ? message.substring(0, 30) + "..." : message;
                 SwingUtilities.invokeLater(() -> {
                     appendLog("已发送 消息" + (sentIndex + 1) + ": " + sentMsg);
                 });
             } catch (Exception e) {
-                e.printStackTrace();
+                final String errMsg = "发送失败: " + e.getMessage();
+                SwingUtilities.invokeLater(() -> appendLog(errMsg));
             }
         }
 
-        currentMessageIndex = (currentMessageIndex + 1) % 5;
-        int checkStart = currentMessageIndex;
-        while (messageAreas[currentMessageIndex].getText().trim().isEmpty()) {
-            currentMessageIndex = (currentMessageIndex + 1) % 5;
-            if (currentMessageIndex == checkStart) break;
+        idx = (idx + 1) % 5;
+        int checkStart = idx;
+        while (messageAreas[idx].getText().trim().isEmpty()) {
+            idx = (idx + 1) % 5;
+            if (idx == checkStart) break;
         }
 
-        final int nextIndex = currentMessageIndex;
+        this.currentMessageIndex = idx;  // 写回
+        final int nextIndex = idx;
         SwingUtilities.invokeLater(() -> highlightMessage(nextIndex));
     }
 
@@ -670,13 +742,17 @@ public class TMPAdSoftware extends JFrame {
             char c = keyName.charAt(0);
             if (Character.isLetter(c)) {
                 int keyCode = KeyEvent.getExtendedKeyCodeForChar(c);
-                if (Character.isUpperCase(c)) {
-                    robot.keyPress(KeyEvent.VK_SHIFT);
-                }
-                robot.keyPress(keyCode);
-                robot.keyRelease(keyCode);
-                if (Character.isUpperCase(c)) {
-                    robot.keyRelease(KeyEvent.VK_SHIFT);
+                boolean needShift = Character.isUpperCase(c);
+                try {
+                    if (needShift) {
+                        robot.keyPress(KeyEvent.VK_SHIFT);
+                    }
+                    robot.keyPress(keyCode);
+                    robot.keyRelease(keyCode);
+                } finally {
+                    if (needShift) {
+                        robot.keyRelease(KeyEvent.VK_SHIFT);
+                    }
                 }
             }
         }
