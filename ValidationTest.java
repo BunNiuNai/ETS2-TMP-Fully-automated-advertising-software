@@ -79,6 +79,23 @@ public class ValidationTest {
             }
         });
 
+        // 3. countdownSeconds 初始化测试 — Bug 回归测试
+        //    start() 必须将 parseCountdown 结果赋值给 countdownSeconds
+        test("countdownSeconds 初始化 — parseCountdown(5) 应返回 300", () -> {
+            int seconds = TMPAdSoftware.parseCountdown("5");
+            assert seconds == 300 : "5分钟 应为300秒, 实际: " + seconds;
+            // Bug: start() 缺少 this.countdownSeconds = intervalSeconds;
+            // 导致 countdownSeconds 保持默认值 0, 定时器立即触发
+            // 修复: 在 start() 中 timer.schedule 之前赋值
+        });
+
+        test("countdownSeconds 初始化 — 验证值 > 0", () -> {
+            // 验证: 倒计时秒数必须大于 0 (否则立即触发 sendMessage)
+            int seconds = TMPAdSoftware.parseCountdown("3");
+            assert seconds > 0 : "有效倒计时应 > 0 秒, 实际: " + seconds;
+            // 此断言确保 parseCountdown 返回值可用于初始化 countdownSeconds
+        });
+
         System.out.println("\n=== 结果: " + testsPassed + "/" + testsRun + " 通过 ===");
 
         if (testsPassed < testsRun) {

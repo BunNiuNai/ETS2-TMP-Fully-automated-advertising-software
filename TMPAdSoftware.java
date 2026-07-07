@@ -69,7 +69,7 @@ public class TMPAdSoftware extends JFrame {
     // ── 字段 ──────────────────────────────────
     private volatile int currentMessageIndex;
     private volatile boolean isRunning;
-    private volatile int countdownSeconds;
+    volatile int countdownSeconds;  // package-private for testing
     private transient Timer timer;
     private transient Robot robot;
     private transient ExecutorService executor;
@@ -566,6 +566,13 @@ public class TMPAdSoftware extends JFrame {
     // ---------- 校验工具（可测试） ----------
 
     /**
+     * 返回当前倒计时秒数。package-private 供测试使用。
+     */
+    int getCountdownSeconds() {
+        return countdownSeconds;
+    }
+
+    /**
      * 校验倒计时输入。返回 null 表示通过，否则返回错误消息。
      */
     static String validateCountdown(String input) {
@@ -658,6 +665,8 @@ public class TMPAdSoftware extends JFrame {
         highlightMessage(currentMessageIndex);
         appendLog("开始发送，间隔 " + intervalMinutes + " 分钟");
 
+        // 初始化倒计时秒数（修复：v3.1 漏掉了此赋值，导致首次立即发送）
+        this.countdownSeconds = intervalSeconds;
         final int initialIntervalSeconds = intervalSeconds; // effectively final copy for lambda
 
         this.timer = new Timer();
