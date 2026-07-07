@@ -69,7 +69,7 @@ public class TMPAdSoftware extends JFrame {
     // ── 字段 ──────────────────────────────────
     private volatile int currentMessageIndex;
     private volatile boolean isRunning;
-    volatile int countdownSeconds;  // package-private for testing
+    private volatile int countdownSeconds;
     private transient Timer timer;
     private transient Robot robot;
     private transient ExecutorService executor;
@@ -739,18 +739,17 @@ public class TMPAdSoftware extends JFrame {
         // 再次检查运行状态，避免快照期间被停止
         if (!isRunning) return;
 
-        int idx = this.currentMessageIndex;  // 快照，防止并发修改
         String message = null;
         boolean found = false;
-        int startIndex = idx;
+        int startIndex = this.currentMessageIndex;
 
         while (!found) {
-            message = messages[idx];
+            message = messages[currentMessageIndex];
             if (message != null && !message.isEmpty()) {
                 found = true;
             } else {
-                idx = (idx + 1) % MESSAGE_COUNT;
-                if (idx == startIndex) {
+                currentMessageIndex = (currentMessageIndex + 1) % MESSAGE_COUNT;
+                if (currentMessageIndex == startIndex) {
                     break;
                 }
             }
@@ -758,9 +757,9 @@ public class TMPAdSoftware extends JFrame {
 
         if (found && message != null && !message.isEmpty() && this.robot != null) {
             try {
-                StringSelection stringSelection = new StringSelection(message);
+                StringSelection ss = new StringSelection(message);
                 Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-                clipboard.setContents(stringSelection, null);
+                clipboard.setContents(ss, null);
 
                 pressKey(this.robot, "Y");
                 this.robot.delay(SEND_DELAY_MS);
@@ -773,7 +772,7 @@ public class TMPAdSoftware extends JFrame {
 
                 pressKey(this.robot, "ENTER");
 
-                final int sentIndex = idx;
+                final int sentIndex = currentMessageIndex;
                 final String sentMsg = message.length() > LOG_PREVIEW_LENGTH
                     ? message.substring(0, LOG_PREVIEW_LENGTH) + "..." : message;
                 SwingUtilities.invokeLater(() -> {
@@ -785,15 +784,14 @@ public class TMPAdSoftware extends JFrame {
             }
         }
 
-        idx = (idx + 1) % MESSAGE_COUNT;
-        int checkStart = idx;
-        while (messages[idx] == null || messages[idx].isEmpty()) {
-            idx = (idx + 1) % MESSAGE_COUNT;
-            if (idx == checkStart) break;
+        currentMessageIndex = (currentMessageIndex + 1) % MESSAGE_COUNT;
+        int checkStart = currentMessageIndex;
+        while (messages[currentMessageIndex] == null || messages[currentMessageIndex].isEmpty()) {
+            currentMessageIndex = (currentMessageIndex + 1) % MESSAGE_COUNT;
+            if (currentMessageIndex == checkStart) break;
         }
 
-        this.currentMessageIndex = idx;  // 写回
-        final int nextIndex = idx;
+        final int nextIndex = currentMessageIndex;
         SwingUtilities.invokeLater(() -> highlightMessage(nextIndex));
     }
 
