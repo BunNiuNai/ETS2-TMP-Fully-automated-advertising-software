@@ -12,6 +12,7 @@ dist/
 *.zip
 *.tar.gz
 *.msi
+TMP广告软件/
 
 # IDE files
 .idea/
