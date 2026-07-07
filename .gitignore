@@ -31,7 +31,6 @@ jre/
 
 # Log files
 *.log
-*.txt
 
 # Backup files
 *~

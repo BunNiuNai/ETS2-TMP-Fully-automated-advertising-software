@@ -5,6 +5,7 @@ import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.*;
 import java.awt.geom.RoundRectangle2D;
+import java.lang.reflect.InvocationTargetException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Timer;
@@ -15,6 +16,29 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 public class TMPAdSoftware extends JFrame {
+
+    private static final long serialVersionUID = 1L;
+
+    // ── 配置常量 ──────────────────────────────
+    private static final int MESSAGE_COUNT       = 5;      // 消息输入框数量
+    private static final int SEND_DELAY_MS       = 500;    // 按键间延迟(ms)
+    private static final int MAX_COUNTDOWN_MINUTES = 1440; // 倒计时上限(24小时)
+    private static final int LOG_PREVIEW_LENGTH   = 30;     // 日志中消息预览最大长度
+    private static final int LOG_MAX_LINES        = 500;    // 日志区最大保留行数
+
+    // ── 字体常量 ──────────────────────────────
+    private static final Font FONT_HEADER = createFont("Microsoft YaHei UI", Font.BOLD, 20);
+    private static final Font FONT_BODY   = createFont("Microsoft YaHei UI", Font.PLAIN, 13);
+    private static final Font FONT_BOLD   = createFont("Microsoft YaHei UI", Font.BOLD, 14);
+    private static final Font FONT_VALUE  = createFont("Microsoft YaHei UI", Font.PLAIN, 13);
+
+    /**
+     * 创建字体，失败时回退到系统默认字体
+     */
+    private static Font createFont(String name, int style, int size) {
+        // new Font() 不会抛异常，Java 自动处理缺失字体
+        return new Font(name, style, size);
+    }
 
     // ── 颜色方案 ──────────────────────────────
     private static final Color BG_MAIN       = new Color(0xF0, 0xF2, 0xF5);  // 整体背景
@@ -30,6 +54,9 @@ public class TMPAdSoftware extends JFrame {
     private static final Color FIELD_BG      = new Color(0xF8, 0xF9, 0xFB);  // 输入框背景
     private static final Color BORDER_LIGHT  = new Color(0xDC, 0xDF, 0xE6);  // 卡片/输入框边框
     private static final Color LOG_BG        = new Color(0xFA, 0xFB, 0xFC);  // 日志背景
+    private static final Color BORDER_CARD   = new Color(0xE4, 0xE7, 0xED);  // 卡片边框
+    private static final Color GREEN_START_PRESS = new Color(0x27, 0x7A, 0x48); // 开始绿(press)
+    private static final Color RED_STOP_PRESS    = new Color(0xA8, 0x23, 0x1C); // 暂停红(press)
 
     private static final Color[] MSG_DOT_COLORS = {
         new Color(0xE7, 0x4C, 0x3C),  // 1 红
@@ -43,9 +70,10 @@ public class TMPAdSoftware extends JFrame {
     private volatile int currentMessageIndex;
     private volatile boolean isRunning;
     private volatile int countdownSeconds;
-    private Timer timer;
-    private Robot robot;
-    private ExecutorService executor;
+    private transient Timer timer;
+    private transient Robot robot;
+    private transient ExecutorService executor;
+    private transient Preferences prefs;
     private JTextField countdownField;
     private JLabel remainingTimeLabel;
     private JLabel currentMessageLabel;
@@ -54,16 +82,16 @@ public class TMPAdSoftware extends JFrame {
     private JTextArea logArea;
     private RoundedButton startButton;
     private RoundedButton stopButton;
-    private Preferences prefs;
     private JLabel statusLabel;
 
     // ════════════════════════════════════════════
     //  自定义圆角按钮
     // ════════════════════════════════════════════
     private static class RoundedButton extends JButton {
+        private static final long serialVersionUID = 1L;
         private Color normalBg, hoverBg, pressBg;
         private boolean hovered, pressed;
-        private int radius = 8;
+        private final int radius = 8;
 
         RoundedButton(String text, Color bg, Color hoverBg, Color pressBg, Color fg) {
             super(text);
@@ -71,7 +99,7 @@ public class TMPAdSoftware extends JFrame {
             this.hoverBg = hoverBg;
             this.pressBg = pressBg;
             setForeground(fg);
-            setFont(new Font("Microsoft YaHei UI", Font.BOLD, 14));
+            setFont(FONT_BOLD);
             setContentAreaFilled(false);
             setFocusPainted(false);
             setBorderPainted(false);
@@ -88,6 +116,7 @@ public class TMPAdSoftware extends JFrame {
         }
 
         @Override protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             Color bg = pressed ? pressBg : hovered ? hoverBg : normalBg;
@@ -106,26 +135,14 @@ public class TMPAdSoftware extends JFrame {
     //  构造
     // ════════════════════════════════════════════
     public TMPAdSoftware() {
-        super("TMP 广告软件");
-        this.currentMessageIndex = 0;
-        this.isRunning = false;
-        this.prefs = Preferences.userNodeForPackage(TMPAdSoftware.class);
-        this.executor = Executors.newSingleThreadExecutor(r -> {
+        setTitle("TMP 广告软件");
+        currentMessageIndex = 0;
+        isRunning = false;
+        prefs = Preferences.userNodeForPackage(TMPAdSoftware.class);
+        executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "msg-sender");
             t.setDaemon(true);
             return t;
-        });
-
-        setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-        setLocationRelativeTo(null);
-
-        addWindowListener(new WindowAdapter() {
-            @Override public void windowClosing(WindowEvent e) {
-                saveSettings();
-                releaseResources();
-                dispose();
-                System.exit(0);
-            }
         });
 
         // ── 主面板 ──
@@ -168,6 +185,18 @@ public class TMPAdSoftware extends JFrame {
 
         setContentPane(mainPanel);
 
+        setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+        setLocationRelativeTo(null);
+
+        addWindowListener(new WindowAdapter() {
+            @Override public void windowClosing(WindowEvent e) {
+                saveSettings();
+                releaseResources();
+                dispose();
+                System.exit(0);
+            }
+        });
+
         // Robot 初始化（必须在 UI 组件创建之后，以便失败时禁用按钮）
         try {
             this.robot = new Robot();
@@ -196,11 +225,11 @@ public class TMPAdSoftware extends JFrame {
         p.setBorder(BorderFactory.createEmptyBorder(0, 4, 4, 4));
 
         JLabel title = new JLabel("TMP 广告软件");
-        title.setFont(new Font("Microsoft YaHei UI", Font.BOLD, 20));
+        title.setFont(FONT_HEADER);
         title.setForeground(TEXT_PRIMARY);
 
         statusLabel = new JLabel("● 就绪");
-        statusLabel.setFont(new Font("Microsoft YaHei UI", Font.PLAIN, 13));
+        statusLabel.setFont(FONT_VALUE);
         statusLabel.setForeground(TEXT_MUTED);
         statusLabel.setBorder(BorderFactory.createEmptyBorder(0, 12, 0, 0));
 
@@ -252,7 +281,7 @@ public class TMPAdSoftware extends JFrame {
         card.add(makeLabel("当前发送", false), g);
         g.gridx = 1; g.weightx = 1; g.fill = GridBagConstraints.HORIZONTAL;
         this.currentMessageLabel = new JLabel("（未启动）");
-        this.currentMessageLabel.setFont(new Font("Microsoft YaHei UI", Font.BOLD, 14));
+        this.currentMessageLabel.setFont(FONT_BOLD);
         this.currentMessageLabel.setForeground(TEXT_MUTED);
         card.add(this.currentMessageLabel, g);
 
@@ -269,10 +298,10 @@ public class TMPAdSoftware extends JFrame {
         g.fill = GridBagConstraints.BOTH;
         g.gridwidth = 1;
 
-        this.messageAreas = new JTextArea[5];
-        this.msgDotLabels = new JLabel[5];
+        this.messageAreas = new JTextArea[MESSAGE_COUNT];
+        this.msgDotLabels = new JLabel[MESSAGE_COUNT];
 
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < MESSAGE_COUNT; i++) {
             // 左边：彩色圆点 + 标签
             JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
             leftPanel.setOpaque(false);
@@ -296,7 +325,7 @@ public class TMPAdSoftware extends JFrame {
             // 右边：输入框
             JTextArea area = new JTextArea(3, 30);
             area.setBackground(FIELD_BG);
-            area.setFont(new Font("Microsoft YaHei UI", Font.PLAIN, 13));
+            area.setFont(FONT_BODY);
             area.setBorder(new CompoundBorder(
                 new RoundedLineBorder(BORDER_LIGHT, 1, 6),
                 BorderFactory.createEmptyBorder(4, 8, 4, 8)
@@ -319,11 +348,11 @@ public class TMPAdSoftware extends JFrame {
         JPanel p = new JPanel(new FlowLayout(FlowLayout.CENTER, 16, 8));
         p.setOpaque(false);
 
-        startButton = new RoundedButton("▶  开始", GREEN_START, GREEN_DARK, new Color(0x27, 0x7A, 0x48), Color.WHITE);
+        startButton = new RoundedButton("▶  开始", GREEN_START, GREEN_DARK, GREEN_START_PRESS, Color.WHITE);
         startButton.addActionListener(e -> start());
         p.add(startButton);
 
-        stopButton = new RoundedButton("■  暂停", RED_STOP, RED_DARK, new Color(0xA8, 0x23, 0x1C), Color.WHITE);
+        stopButton = new RoundedButton("■  暂停", RED_STOP, RED_DARK, RED_STOP_PRESS, Color.WHITE);
         stopButton.setEnabled(false);
         stopButton.addActionListener(e -> stop());
         p.add(stopButton);
@@ -357,7 +386,7 @@ public class TMPAdSoftware extends JFrame {
         card.setBackground(BG_CARD);
         if (title != null) {
             TitledBorder tb = BorderFactory.createTitledBorder(
-                new RoundedLineBorder(new Color(0xE4, 0xE7, 0xED), 1, 8),
+                new RoundedLineBorder(BORDER_CARD, 1, 8),
                 title,
                 TitledBorder.LEFT, TitledBorder.TOP,
                 new Font("Microsoft YaHei UI", Font.BOLD, 13),
@@ -366,7 +395,7 @@ public class TMPAdSoftware extends JFrame {
             card.setBorder(tb);
         } else {
             card.setBorder(new CompoundBorder(
-                new RoundedLineBorder(new Color(0xE4, 0xE7, 0xED), 1, 8),
+                new RoundedLineBorder(BORDER_CARD, 1, 8),
                 BorderFactory.createEmptyBorder(10, 14, 10, 14)
             ));
         }
@@ -376,21 +405,21 @@ public class TMPAdSoftware extends JFrame {
     // ── 辅助：标签 ─────────────────────────────
     private JLabel makeLabel(String text, boolean bold) {
         JLabel l = new JLabel(text);
-        l.setFont(new Font("Microsoft YaHei UI", bold ? Font.BOLD : Font.PLAIN, 13));
+        l.setFont(FONT_BODY);
         l.setForeground(TEXT_PRIMARY);
         return l;
     }
 
     private JLabel makeValueLabel(String text) {
         JLabel l = new JLabel(text);
-        l.setFont(new Font("Microsoft YaHei UI", Font.PLAIN, 13));
+        l.setFont(FONT_VALUE);
         l.setForeground(TEXT_MUTED);
         l.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
         return l;
     }
 
     private void styleTextField(JTextField tf) {
-        tf.setFont(new Font("Microsoft YaHei UI", Font.PLAIN, 13));
+        tf.setFont(FONT_BODY);
         tf.setBackground(FIELD_BG);
         tf.setForeground(TEXT_PRIMARY);
         tf.setCaretColor(ACCENT_BLUE);
@@ -404,6 +433,7 @@ public class TMPAdSoftware extends JFrame {
     //  自定义圆角边框
     // ════════════════════════════════════════════
     private static class RoundedLineBorder extends AbstractBorder {
+        private static final long serialVersionUID = 1L;
         private final Color color;
         private final int thickness;
         private final int radius;
@@ -432,7 +462,7 @@ public class TMPAdSoftware extends JFrame {
     }
 
     // ════════════════════════════════════════════
-    //  以下方法功能完全不变
+    //  业务方法
     // ════════════════════════════════════════════
 
     private void showUsageInstructions() {
@@ -464,7 +494,7 @@ public class TMPAdSoftware extends JFrame {
         if (!countdown.isEmpty()) {
             countdownField.setText(countdown);
         }
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < MESSAGE_COUNT; i++) {
             String msg = prefs.get("message" + i, "");
             if (!msg.isEmpty()) {
                 messageAreas[i].setText(msg);
@@ -476,8 +506,10 @@ public class TMPAdSoftware extends JFrame {
         String countdown = countdownField.getText().trim();
         if (!countdown.isEmpty()) {
             prefs.put("countdown", countdown);
+        } else {
+            prefs.remove("countdown");
         }
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < MESSAGE_COUNT; i++) {
             String msg = messageAreas[i].getText().trim();
             if (!msg.isEmpty()) {
                 prefs.put("message" + i, msg);
@@ -518,6 +550,16 @@ public class TMPAdSoftware extends JFrame {
     private void appendLog(String text) {
         String timestamp = new SimpleDateFormat("HH:mm:ss").format(new Date());
         logArea.append("[" + timestamp + "] " + text + "\n");
+        // 防内存泄漏：超过最大行数时移除最早的记录
+        try {
+            int lineCount = logArea.getLineCount();
+            if (lineCount > LOG_MAX_LINES) {
+                int end = logArea.getLineStartOffset(lineCount - LOG_MAX_LINES);
+                logArea.replaceRange("", 0, end);
+            }
+        } catch (javax.swing.text.BadLocationException e) {
+            // 极少发生，忽略以保证稳定性
+        }
         logArea.setCaretPosition(logArea.getDocument().getLength());
     }
 
@@ -539,8 +581,8 @@ public class TMPAdSoftware extends JFrame {
         if (minutes <= 0) {
             return "倒计时必须大于 0 分钟";
         }
-        if (minutes > 1440) {
-            return "倒计时不能超过 1440 分钟（24 小时）";
+        if (minutes > MAX_COUNTDOWN_MINUTES) {
+            return "倒计时不能超过 " + MAX_COUNTDOWN_MINUTES + " 分钟（24 小时）";
         }
         return null;
     }
@@ -587,10 +629,9 @@ public class TMPAdSoftware extends JFrame {
             return;
         }
 
-        int intervalMinutes;
+        int intervalSeconds = -1;
         try {
-            intervalMinutes = Integer.parseInt(countdownText.trim());
-            this.countdownSeconds = parseCountdown(countdownText);
+            intervalSeconds = parseCountdown(countdownText);
         } catch (NumberFormatException e) {
             JOptionPane.showMessageDialog(this,
                 "请输入有效的倒计时时间",
@@ -609,13 +650,15 @@ public class TMPAdSoftware extends JFrame {
         this.startButton.setEnabled(false);
         this.stopButton.setEnabled(true);
 
+        int intervalMinutes = intervalSeconds / 60;
+
         while (messageAreas[currentMessageIndex].getText().trim().isEmpty()) {
-            currentMessageIndex = (currentMessageIndex + 1) % 5;
+            currentMessageIndex = (currentMessageIndex + 1) % MESSAGE_COUNT;
         }
         highlightMessage(currentMessageIndex);
         appendLog("开始发送，间隔 " + intervalMinutes + " 分钟");
 
-        final int intervalSeconds = this.countdownSeconds;
+        final int initialIntervalSeconds = intervalSeconds; // effectively final copy for lambda
 
         this.timer = new Timer();
         this.timer.scheduleAtFixedRate(new TimerTask() {
@@ -625,7 +668,7 @@ public class TMPAdSoftware extends JFrame {
                     remainingTimeLabel.setText(String.valueOf(countdownSeconds));
                     if (countdownSeconds <= 0) {
                         executor.submit(() -> sendMessage());
-                        countdownSeconds = intervalSeconds;
+                        countdownSeconds = initialIntervalSeconds;
                     }
                     countdownSeconds--;
                 });
@@ -667,18 +710,37 @@ public class TMPAdSoftware extends JFrame {
     }
 
     private void sendMessage() {
+        // P0-2: 已暂停则放弃本次发送（stop() 可能在此任务排队期间触发）
+        if (!isRunning) return;
+
+        // P0-1: 在 EDT 快照消息文本，避免非 EDT 线程访问 Swing 组件
+        final String[] messages = new String[MESSAGE_COUNT];
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                for (int i = 0; i < MESSAGE_COUNT; i++) {
+                    messages[i] = messageAreas[i].getText().trim();
+                }
+            });
+        } catch (InvocationTargetException | InterruptedException e) {
+            Thread.currentThread().interrupt();
+            SwingUtilities.invokeLater(() -> appendLog("发送取消: 无法读取消息内容"));
+            return;
+        }
+
+        // 再次检查运行状态，避免快照期间被停止
+        if (!isRunning) return;
+
         int idx = this.currentMessageIndex;  // 快照，防止并发修改
         String message = null;
         boolean found = false;
         int startIndex = idx;
 
         while (!found) {
-            message = messageAreas[idx].getText().trim();
-
+            message = messages[idx];
             if (message != null && !message.isEmpty()) {
                 found = true;
             } else {
-                idx = (idx + 1) % 5;
+                idx = (idx + 1) % MESSAGE_COUNT;
                 if (idx == startIndex) {
                     break;
                 }
@@ -692,18 +754,19 @@ public class TMPAdSoftware extends JFrame {
                 clipboard.setContents(stringSelection, null);
 
                 pressKey(this.robot, "Y");
-                this.robot.delay(500);
+                this.robot.delay(SEND_DELAY_MS);
 
                 this.robot.keyPress(KeyEvent.VK_CONTROL);
                 this.robot.keyPress(KeyEvent.VK_V);
                 this.robot.keyRelease(KeyEvent.VK_V);
                 this.robot.keyRelease(KeyEvent.VK_CONTROL);
-                this.robot.delay(500);
+                this.robot.delay(SEND_DELAY_MS);
 
                 pressKey(this.robot, "ENTER");
 
                 final int sentIndex = idx;
-                final String sentMsg = message.length() > 30 ? message.substring(0, 30) + "..." : message;
+                final String sentMsg = message.length() > LOG_PREVIEW_LENGTH
+                    ? message.substring(0, LOG_PREVIEW_LENGTH) + "..." : message;
                 SwingUtilities.invokeLater(() -> {
                     appendLog("已发送 消息" + (sentIndex + 1) + ": " + sentMsg);
                 });
@@ -713,10 +776,10 @@ public class TMPAdSoftware extends JFrame {
             }
         }
 
-        idx = (idx + 1) % 5;
+        idx = (idx + 1) % MESSAGE_COUNT;
         int checkStart = idx;
-        while (messageAreas[idx].getText().trim().isEmpty()) {
-            idx = (idx + 1) % 5;
+        while (messages[idx] == null || messages[idx].isEmpty()) {
+            idx = (idx + 1) % MESSAGE_COUNT;
             if (idx == checkStart) break;
         }
 
@@ -759,6 +822,22 @@ public class TMPAdSoftware extends JFrame {
     }
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(TMPAdSoftware::new);
+        // 设置系统原生外观，提升跨平台一致性
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception ignored) {
+        }
+        // 全局未捕获异常处理器，避免异常静默丢失
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+            System.err.println("[" + t.getName() + "] 未捕获异常: " + e);
+            e.printStackTrace();
+        });
+        SwingUtilities.invokeLater(() -> {
+            Thread.currentThread().setUncaughtExceptionHandler((t, e) -> {
+                System.err.println("[EDT] 未捕获异常: " + e);
+                e.printStackTrace();
+            });
+            new TMPAdSoftware();
+        });
     }
 }
